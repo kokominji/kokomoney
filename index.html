@@ -61,11 +61,11 @@ main{padding:4px 0 130px}
 .nav:hover{border-color:var(--ink)}
 
 /* totals */
-.totals{display:grid;grid-template-columns:1fr 1fr;border-top:2px solid var(--ink);border-bottom:1px solid var(--rule)}
+.totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:2px solid var(--ink);border-bottom:1px solid var(--rule)}
 .totals>div{padding:14px 0 12px}
 .totals>div+div{border-left:1px solid var(--rule);padding-left:16px}
 .totals span{display:block;font-size:.82rem;color:var(--muted)}
-.totals b{display:block;font-size:1.45rem;font-weight:700;letter-spacing:-.02em;line-height:1.35}
+.totals b{display:block;overflow-wrap:anywhere;font-size:clamp(1rem,4.4vw,1.35rem);font-weight:700;letter-spacing:-.02em;line-height:1.35}
 .totals small{color:var(--muted);font-size:.8rem}
 .totals b.red{color:var(--red)}
 .totals b.green{color:var(--green)}
@@ -88,6 +88,10 @@ main{padding:4px 0 130px}
 .kind{font-size:.7rem;font-weight:600;padding:1px 6px;border-radius:3px;margin-left:6px;vertical-align:2px}
 .kind.spend{background:var(--blue-soft);color:var(--blue)}
 .kind.save{background:var(--green-soft);color:var(--green)}
+.kind.income{background:var(--track);color:var(--amber)}
+.leftover{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:10px 0;border-bottom:1px solid var(--rule);font-size:.86rem}
+.leftover span{color:var(--muted)}
+.leftover b{font-size:1.05rem;white-space:nowrap}
 .lamt{color:var(--muted);font-size:.88rem;white-space:nowrap}
 .lamt b{color:var(--ink);font-size:1.02rem;font-weight:700}
 .bar{position:relative;height:8px;background:var(--track);border-radius:4px}
@@ -252,7 +256,7 @@ dialog form{padding:18px 18px 20px}
 .toast.show{opacity:1}
 
 @media (max-width:420px){
-  .totals b{font-size:1.25rem}
+  .totals>div+div{padding-left:10px}
   .wrow{grid-template-columns:6.4em 1fr 5.8em;gap:8px}
   .cat-edit .row{grid-template-columns:1fr 8.5em}
   .period h2{font-size:1.25rem}
@@ -315,11 +319,13 @@ dialog form{padding:18px 18px 20px}
 
 /* ---------- defaults ---------- */
 const DEFAULT_SETTINGS = {
+  v: 2,
   weekStart: 1,
   cycleMode: 'payday',
   payDay: 30,
   payOverrides: {},
   categories: [
+    { id:'salary',  name:'월급',      kind:'income', goal:0, subs:['월급','상여금','부수입','기타'] },
     { id:'save',    name:'저금',      kind:'save',  goal:800000, subs:['저금','비상금'] },
     { id:'pension', name:'연금+적금', kind:'save',  goal:400000, subs:['연금','적금'] },
     { id:'living',  name:'생활비',    kind:'spend', goal:500000, subs:['식비','카페·간식','교통','쇼핑','생활용품','의료','문화·여가','경조사','기타'] },
@@ -379,6 +385,7 @@ function normalizeSettings(s) {
     cycleMode: s && s.cycleMode === 'calendar' ? 'calendar' : 'payday',
     payDay: Math.min(31, Math.max(1, Number(s && s.payDay) || 30)),
     payOverrides: {},
+    v: 2,
     categories: []
   };
   if (s && s.payOverrides && typeof s.payOverrides === 'object') Object.keys(s.payOverrides).forEach(k => { const v = String(s.payOverrides[k]); if (/^\d{4}-\d{2}-\d{2}$/.test(v)) out.payOverrides[k] = v; });
@@ -387,11 +394,13 @@ function normalizeSettings(s) {
     if (!c || !c.id) return;
     out.categories.push({
       id: String(c.id), name: String(c.name || '이름 없음'),
-      kind: c.kind === 'save' ? 'save' : 'spend',
+      kind: c.kind === 'save' || c.kind === 'income' ? c.kind : 'spend',
       goal: Math.max(0, Number(c.goal) || 0),
       subs: Array.isArray(c.subs) ? c.subs.map(String) : []
     });
   });
+  // 예전 설정에는 수입 유형이 없어서 월급 유형을 한 번 넣어 줘요
+  if (!(s && s.v >= 2) && !out.categories.some(c => c.kind === 'income')) out.categories.unshift(clone(DEFAULT_SETTINGS.categories[0]));
   return out;
 }
 function normItems(arr) {
@@ -506,18 +515,20 @@ function catOf(id) {
   return cats().find(c => c.id === id) || { id, name: '삭제된 유형', kind: 'spend', goal: 0, subs: [], ghost: true };
 }
 const isSave = e => catOf(e.cat).kind === 'save';
+const kindOf = e => catOf(e.cat).kind;
 function allItems() { const out = []; Object.keys(state.months).forEach(k => { out.push.apply(out, state.months[k]); }); return out; }
 function itemsBetween(a, b) { return allItems().filter(x => x.date >= a && x.date <= b); }
 function monthItems(key) { return state.months[key] || []; }
 function aggregate(items) {
-  const byCat = {}, bySub = {}; let spend = 0, save = 0;
+  const byCat = {}, bySub = {}; let spend = 0, save = 0, income = 0;
   items.forEach(e => {
     byCat[e.cat] = (byCat[e.cat] || 0) + e.amount;
     const k = e.cat + '|' + (e.sub || '');
     bySub[k] = (bySub[k] || 0) + e.amount;
-    if (isSave(e)) save += e.amount; else spend += e.amount;
+    const kd = kindOf(e);
+    if (kd === 'save') save += e.amount; else if (kd === 'income') income += e.amount; else spend += e.amount;
   });
-  return { byCat, bySub, spend, save };
+  return { byCat, bySub, spend, save, income };
 }
 const spendGoal = () => cats().filter(c => c.kind === 'spend').reduce((a, c) => a + c.goal, 0);
 const saveGoal = () => cats().filter(c => c.kind === 'save').reduce((a, c) => a + c.goal, 0);
@@ -579,12 +590,15 @@ function periodNav(view, label, sub) {
     '<h2>' + label + (sub ? '<small>' + sub + '</small>' : '') + '</h2>' +
     '<button class="nav" data-action="next" aria-label="다음">›</button></div>';
 }
-function totalsBlock(agg, sg, vg, labels) {
+function totalsBlock(agg, sg, vg) {
   const over = sg != null && sg > 0 && agg.spend > sg;
+  const left = agg.income - agg.spend - agg.save;
   return '<div class="totals">' +
-    '<div><span>' + (labels ? labels[0] : '지출') + '</span><b class="' + (over ? 'red' : '') + '">' + won(agg.spend) + '</b>' + (sg != null ? '<small>한도 ' + won(sg) + '</small>' : '') + '</div>' +
-    '<div><span>' + (labels ? labels[1] : '모은 돈') + '</span><b class="green">' + won(agg.save) + '</b>' + (vg != null ? '<small>목표 ' + won(vg) + '</small>' : '') + '</div>' +
-    '</div>';
+    '<div><span>수입</span><b>' + won(agg.income) + '</b></div>' +
+    '<div><span>지출</span><b class="' + (over ? 'red' : '') + '">' + won(agg.spend) + '</b>' + (sg != null ? '<small>한도 ' + won(sg) + '</small>' : '') + '</div>' +
+    '<div><span>모은 돈</span><b class="green">' + won(agg.save) + '</b>' + (vg != null ? '<small>목표 ' + won(vg) + '</small>' : '') + '</div>' +
+    '</div>' +
+    (agg.income > 0 ? '<div class="leftover"><span>수입 − 지출 − 모은 돈</span><b class="' + (left < 0 ? 'red' : '') + '">' + won(Math.abs(left)) + (left < 0 ? ' 부족' : ' 남음') + '</b></div>' : '');
 }
 function subRows(c, bySub, used) {
   const rows = [];
@@ -632,14 +646,14 @@ function entryList(items, emptyMsg, title) {
   if (!sorted.length) return h + '<div class="empty-state">' + emptyMsg + '</div></section>';
   const shown = sorted.slice(0, ui.listLimit);
   let cur = null, dayTotal = {};
-  shown.forEach(e => { if (!isSave(e)) dayTotal[e.date] = (dayTotal[e.date] || 0) + e.amount; });
+  shown.forEach(e => { if (kindOf(e) === 'spend') dayTotal[e.date] = (dayTotal[e.date] || 0) + e.amount; });
   shown.forEach(e => {
     if (e.date !== cur) {
       if (cur) h += '</div>';
       cur = e.date;
       h += '<div class="dgroup"><h3><span>' + md(e.date) + '</span><span>' + (dayTotal[e.date] ? '지출 ' + won(dayTotal[e.date]) : '') + '</span></h3>';
     }
-    const c = catOf(e.cat); const sv = c.kind === 'save';
+    const c = catOf(e.cat); const sv = c.kind !== 'spend';
     h += '<button class="erow" data-action="edit" data-id="' + esc(e.id) + '">' +
       '<span class="t">' + esc(e.sub || c.name) + '<span class="tag">' + esc(c.name) + '</span></span>' +
       '<span class="a' + (sv ? ' save' : '') + '">' + (sv ? '+' : '−') + num(e.amount) + '</span>' +
@@ -678,7 +692,7 @@ function exportCSV() {
   const rows = [['날짜', '구분', '유형', '세부 항목', '금액', '메모']];
   allItems().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0).forEach(e => {
     const c = catOf(e.cat);
-    rows.push([e.date, c.kind === 'save' ? '모으기' : '지출', c.name, e.sub, e.amount, e.memo]);
+    rows.push([e.date, ({ save: '모으기', income: '수입', spend: '지출' }[c.kind]), c.name, e.sub, e.amount, e.memo]);
   });
   const csv = '\uFEFF' + rows.map(r => r.map(v => { const s = String(v == null ? '' : v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\r\n');
   saveFile('가계부-' + ds(today()) + '.csv', csv, 'text/csv');
@@ -724,7 +738,7 @@ function renderMonth() {
   h += '<section class="block"><h2>목표 대비</h2>' +
     (isCur ? '<p class="lead">막대 위 세로선은 이번 달이 지나간 만큼이에요. 막대가 선보다 앞서 있으면 계획보다 빨리 쓰고 있다는 뜻이에요.</p>' : '<p class="lead">유형을 누르면 세부 항목별 금액이 열리고 닫혀요.</p>') +
     '<div class="ledger">' +
-    cats().map(c => catRow(c, agg.byCat[c.id] || 0, c.goal, agg.bySub, { pace, daysLeft: isCur ? n - elapsed + 1 : null })).join('') +
+    cats().filter(c => c.kind !== 'income').map(c => catRow(c, agg.byCat[c.id] || 0, c.goal, agg.bySub, { pace, daysLeft: isCur ? n - elapsed + 1 : null })).join('') +
     ghostCats(agg.byCat).map(c => catRow(c, agg.byCat[c.id] || 0, 0, agg.bySub)).join('') +
     '</div></section>';
 
@@ -768,18 +782,18 @@ function renderWeek() {
   const wg = c => Math.round(c.goal * 7 / n);
   const sgw = cats().filter(c => c.kind === 'spend').reduce((a, c) => a + wg(c), 0);
   const vgw = cats().filter(c => c.kind === 'save').reduce((a, c) => a + wg(c), 0);
-  h += totalsBlock(agg, sgw, vgw, ['이번 주 지출', '이번 주 모은 돈']);
+  h += totalsBlock(agg, sgw, vgw);
 
   // daily bars (spending)
   const days = [];
-  for (let i = 0; i < 7; i++) { const d = addDays(s, i); const k = ds(d); days.push({ d, v: items.filter(x => x.date === k && !isSave(x)).reduce((a, x) => a + x.amount, 0) }); }
+  for (let i = 0; i < 7; i++) { const d = addDays(s, i); const k = ds(d); days.push({ d, v: items.filter(x => x.date === k && kindOf(x) === 'spend').reduce((a, x) => a + x.amount, 0) }); }
   const max = Math.max.apply(null, days.map(x => x.v).concat([1]));
   h += '<section class="block"><h2>요일별 지출</h2><div class="days">' +
     days.map(x => '<div class="day' + (ds(x.d) === ds(t) ? ' today' : '') + '"><span class="v">' + (x.v ? short(x.v) : '') + '</span><i style="height:' + (x.v / max * 82).toFixed(1) + '%"></i></div>').join('') +
     '</div><div class="dlabels">' + days.map(x => '<span class="' + (ds(x.d) === ds(t) ? 'today' : '') + '">' + DOW[x.d.getDay()] + '<br>' + x.d.getDate() + '</span>').join('') + '</div></section>';
 
   h += '<section class="block"><h2>주간 기준 대비</h2><p class="lead">월 목표를 이번 달 날짜 수로 나눠 7일치로 계산한 기준이에요.</p><div class="ledger">' +
-    cats().map(c => catRow(c, agg.byCat[c.id] || 0, wg(c), agg.bySub)).join('') +
+    cats().filter(c => c.kind !== 'income').map(c => catRow(c, agg.byCat[c.id] || 0, wg(c), agg.bySub)).join('') +
     ghostCats(agg.byCat).map(c => catRow(c, agg.byCat[c.id] || 0, 0, agg.bySub)).join('') +
     '</div></section>';
   h += entryList(items, '이번 주에는 기록이 없어요.', '이 주의 기록');
@@ -830,9 +844,10 @@ function renderRange() {
   else {
     const spendList = list.filter(c => c.kind === 'spend').sort((a, b) => agg.byCat[b.id] - agg.byCat[a.id]);
     const saveList = list.filter(c => c.kind === 'save').sort((a, b) => agg.byCat[b.id] - agg.byCat[a.id]);
-    h += '<div class="ledger">' + spendList.concat(saveList).map(c => {
-      const v = agg.byCat[c.id]; const base = c.kind === 'save' ? agg.save : agg.spend;
-      return '<div class="bk"><div class="h"><b>' + esc(c.name) + '<span class="kind ' + c.kind + '">' + (c.kind === 'save' ? '모으기' : '지출') + '</span></b><span><b>' + won(v) + '</b> <span class="hint">' + (base ? Math.round(v / base * 100) : 0) + '%</span></span></div>' +
+    const incomeList = list.filter(c => c.kind === 'income').sort((a, b) => agg.byCat[b.id] - agg.byCat[a.id]);
+    h += '<div class="ledger">' + incomeList.concat(spendList, saveList).map(c => {
+      const v = agg.byCat[c.id]; const base = c.kind === 'save' ? agg.save : c.kind === 'income' ? agg.income : agg.spend;
+      return '<div class="bk"><div class="h"><b>' + esc(c.name) + '<span class="kind ' + c.kind + '">' + ({ save: '모으기', income: '수입', spend: '지출' }[c.kind]) + '</span></b><span><b>' + won(v) + '</b> <span class="hint">' + (base ? Math.round(v / base * 100) : 0) + '%</span></span></div>' +
         '<div class="subs" style="margin-top:4px">' + subRows(c, agg.bySub, v) + '</div></div>';
     }).join('') + '</div>';
   }
@@ -948,17 +963,18 @@ function renderSetup() {
     h += '<div class="paylist">' + rows + '</div>';
   }
   h += '</section>';
-  h += '<section class="block"><h2>지출유형과 월 목표</h2><p class="lead">‘한도’는 넘으면 초과로, ‘모으기’는 못 채우면 미달로 표시해요.</p>';
+  h += '<section class="block"><h2>지출유형과 월 목표</h2><p class="lead">‘한도’는 넘으면 초과로, ‘모으기’는 못 채우면 미달로 표시해요. ‘수입’은 월급처럼 들어온 돈이에요.</p>';
   cats().forEach(c => {
     const armed = ui.armed === 'cat:' + c.id;
     h += '<div class="cat-edit">' +
       '<div class="row">' +
         '<label><span>이름</span><input data-field="name" data-id="' + esc(c.id) + '" value="' + esc(c.name) + '" maxlength="16"></label>' +
-        '<label><span>월 목표</span><div class="goal-wrap"><input data-field="goal" data-id="' + esc(c.id) + '" inputmode="numeric" value="' + num(c.goal) + '"><em>원</em></div></label>' +
+        '<label><span>' + (c.kind === 'income' ? '예상 금액 (선택)' : '월 목표') + '</span><div class="goal-wrap"><input data-field="goal" data-id="' + esc(c.id) + '" inputmode="numeric" value="' + num(c.goal) + '"><em>원</em></div></label>' +
       '</div>' +
       '<div class="row2"><div class="seg">' +
-        '<button data-action="kind" data-id="' + esc(c.id) + '" data-v="spend" aria-pressed="' + (c.kind === 'spend') + '">한도 (쓰는 돈)</button>' +
-        '<button data-action="kind" data-id="' + esc(c.id) + '" data-v="save" aria-pressed="' + (c.kind === 'save') + '">모으기 (모으는 돈)</button>' +
+        '<button data-action="kind" data-id="' + esc(c.id) + '" data-v="spend" aria-pressed="' + (c.kind === 'spend') + '">지출 한도</button>' +
+        '<button data-action="kind" data-id="' + esc(c.id) + '" data-v="save" aria-pressed="' + (c.kind === 'save') + '">모으기</button>' +
+        '<button data-action="kind" data-id="' + esc(c.id) + '" data-v="income" aria-pressed="' + (c.kind === 'income') + '">수입</button>' +
       '</div><button class="btn danger' + (armed ? ' armed' : '') + '" data-action="del-cat" data-id="' + esc(c.id) + '">' + (armed ? '한 번 더 누르면 삭제' : '유형 삭제') + '</button></div>' +
       '<div class="subchips">' + (c.subs.length ? c.subs.map((s, i) => '<span class="subchip">' + esc(s) + '<button data-action="del-sub" data-id="' + esc(c.id) + '" data-i="' + i + '" aria-label="' + esc(s) + ' 삭제">×</button></span>').join('') : '<span class="hint">세부 항목이 없어요</span>') + '</div>' +
       '<div class="subadd"><input data-addsub="' + esc(c.id) + '" maxlength="20" placeholder="세부 항목 추가 (예: 배달)"><button class="btn" data-action="add-sub" data-id="' + esc(c.id) + '">추가</button></div>' +
